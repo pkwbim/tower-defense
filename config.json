@@ -1,0 +1,9 @@
+{
+    "images": {
+        "tower": "assets/tower.png"
+    },
+    "tower_size": {
+        "width": 60,
+        "height": 60
+    }
+}
