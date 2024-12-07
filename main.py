@@ -51,11 +51,6 @@ RED = (255, 0, 0)
 GREEN = (0, 255, 0)
 BLUE = (0, 0, 255)
 
-# 遊戲變數
-money = 100
-score = 0
-lives = 10
-
 # 格子設置
 GRID_SIZE = 80  # 每個格子的大小
 GRID_COLS = 9   # 列數
@@ -88,227 +83,244 @@ class Enemy:
         self.current_target = None  # 新增：當前攻擊目標
 
 class Projectile:
-    def __init__(self, x, y, target):
+    def __init__(self, x, y, target, game_state):  
         self.x = x
         self.y = y
         self.target = target
         self.speed = 5
         self.radius = 5
+        self.game_state = game_state  
 
     def move(self):
-        if self.target is None or self.target not in enemies:
+        if self.target is None or self.target not in self.game_state.enemies:  
             return False
         
         dx = self.target.x - self.x
         dy = self.target.y - self.y
         distance = math.sqrt(dx * dx + dy * dy)
         
-        if distance < self.speed:
+        if distance < 1:
             return False
         
         self.x += (dx / distance) * self.speed
         self.y += (dy / distance) * self.speed
         return True
 
-# 遊戲狀態
-towers = []
-enemies = []
-game_grid = [[0 for _ in range(GRID_COLS)] for _ in range(GRID_ROWS)]
-spawn_timer = 0
-wave = 1
+class GameState:
+    def __init__(self):
+        self.money = 100
+        self.score = 0
+        self.lives = 10
+        self.wave = 1
+        self.spawn_timer = 0
+        self.towers = []
+        self.enemies = []
+        self.game_grid = [[0 for _ in range(GRID_COLS)] for _ in range(GRID_ROWS)]
+        self.running = True
 
-def draw_grid():
-    for row in range(GRID_ROWS):
-        for col in range(GRID_COLS):
-            x = GRID_MARGIN + col * GRID_SIZE
-            y = GRID_MARGIN + row * GRID_SIZE
-            pygame.draw.rect(screen, BLACK, (x, y, GRID_SIZE, GRID_SIZE), 1)
+    def can_place_tower(self, col, row):
+        return (col < GRID_COLS and 
+                self.money >= 50 and 
+                self.game_grid[row][col] == 0)
 
-def draw_towers():
-    for tower in towers:
-        # 如果有圖片就使用圖片，否則用圓形
-        if tower_image:
-            # 計算圖片位置（置中於格子）
-            image_x = tower.x + (GRID_SIZE - config['tower_size']['width']) // 2
-            image_y = tower.y + (GRID_SIZE - config['tower_size']['height']) // 2
-            screen.blit(tower_image, (image_x, image_y))
-        else:
-            # 如果沒有圖片，退回使用綠色圓形
-            pygame.draw.circle(screen, GREEN, 
-                             (tower.x + GRID_SIZE//2, tower.y + GRID_SIZE//2), 
-                             GRID_SIZE//3)
+    def place_tower(self, col, row):
+        tower_x = GRID_MARGIN + col * GRID_SIZE
+        tower_y = GRID_MARGIN + row * GRID_SIZE
+        self.towers.append(Tower(tower_x, tower_y))
+        self.game_grid[row][col] = 1
+        self.money -= 50
+
+    def is_game_over(self):
+        return self.lives <= 0
+
+class GameRenderer:
+    def __init__(self, screen, game_font):
+        self.screen = screen
+        self.game_font = game_font
+
+    def render(self, game_state):
+        self.screen.fill(WHITE)
+        self._draw_grid()
+        self._draw_towers(game_state.towers)
+        self._draw_enemies(game_state.enemies)
+        self._draw_game_stats(game_state)
         
-        # 畫血條
-        health_width = 40 * (tower.health / tower.max_health)
-        pygame.draw.rect(screen, GREEN, 
-                        (tower.x + GRID_SIZE//4, tower.y - 10, health_width, 5))
-        # 畫炮彈
-        for projectile in tower.projectiles:
-            pygame.draw.circle(screen, BLACK,
-                             (int(projectile.x), int(projectile.y)),
-                             projectile.radius)
+        if game_state.is_game_over():
+            self._draw_game_over()
+        
+        pygame.display.flip()
 
-def draw_enemies():
-    for enemy in enemies:
-        pygame.draw.rect(screen, RED, 
-                        (enemy.x - 20, enemy.y - 20, 40, 40))
-        # 繪製血條
-        health_width = 40 * (enemy.health / enemy.max_health)
-        pygame.draw.rect(screen, RED, 
-                        (enemy.x - 20, enemy.y - 30, health_width, 5))
+    def _draw_grid(self):
+        for row in range(GRID_ROWS):
+            for col in range(GRID_COLS):
+                x = GRID_MARGIN + col * GRID_SIZE
+                y = GRID_MARGIN + row * GRID_SIZE
+                pygame.draw.rect(self.screen, BLACK, (x, y, GRID_SIZE, GRID_SIZE), 1)
 
-def update_enemies():
-    global lives
-    for enemy in enemies[:]:
-        if enemy.current_target:
-            # 如果有目標，進行攻擊
-            if enemy.attack_cooldown <= 0:
-                enemy.current_target.health -= enemy.attack_power
-                enemy.attack_cooldown = 30  # 設置攻擊冷卻時間
-                
-                # 檢查防禦塔是否被摧毀
-                if enemy.current_target.health <= 0:
-                    towers.remove(enemy.current_target)
-                    enemy.current_target = None
+    def _draw_towers(self, towers):
+        for tower in towers:
+            if tower_image:
+                image_x = tower.x + (GRID_SIZE - config['tower_size']['width']) // 2
+                image_y = tower.y + (GRID_SIZE - config['tower_size']['height']) // 2
+                self.screen.blit(tower_image, (image_x, image_y))
             else:
-                enemy.attack_cooldown -= 1
-        else:
-            # 檢查前方是否有防禦塔
-            enemy_col = (enemy.x - GRID_MARGIN) // GRID_SIZE
-            enemy_row = (enemy.y - GRID_MARGIN) // GRID_SIZE
+                pygame.draw.circle(self.screen, GREEN, 
+                                 (tower.x + GRID_SIZE//2, tower.y + GRID_SIZE//2), 
+                                 GRID_SIZE//3)
             
-            # 檢查當前位置的前一格是否有防禦塔
-            for tower in towers:
-                tower_col = (tower.x - GRID_MARGIN) // GRID_SIZE
-                tower_row = (tower.y - GRID_MARGIN) // GRID_SIZE
-                
-                # 如果在同一行，且防禦塔在殭屍前方
-                if (tower_row == enemy_row and 
-                    tower_col < enemy_col and 
-                    abs(enemy.x - (tower.x + GRID_SIZE)) < enemy.speed):
-                    enemy.current_target = tower
-                    break
+            health_width = 40 * (tower.health / tower.max_health)
+            pygame.draw.rect(self.screen, GREEN, 
+                           (tower.x + GRID_SIZE//4, tower.y - 10, health_width, 5))
             
-            # 如果沒有目標，繼續移動
-            if not enemy.current_target:
-                enemy.x -= enemy.speed
-                
-                # 如果到達最左邊
-                if enemy.x < 0:
-                    enemies.remove(enemy)
-                    lives -= 1
+            for projectile in tower.projectiles:
+                pygame.draw.circle(self.screen, GREEN,
+                                 (int(projectile.x), int(projectile.y)),
+                                 projectile.radius)
 
-def spawn_enemy():
-    global spawn_timer
-    spawn_timer += 1
-    if spawn_timer >= 60:  # 每秒產生一個敵人
-        row = random.randint(0, GRID_ROWS-1)
-        enemies.append(Enemy(row))
-        spawn_timer = 0
-
-def tower_attack():
-    for tower in towers:
-        # 更新炮彈
-        tower.projectiles = [p for p in tower.projectiles if p.move()]
-        
-        # 檢查冷卻時間
-        if tower.attack_cooldown > 0:
-            tower.attack_cooldown -= 1
-            continue
-
-        tower_center = (tower.x + GRID_SIZE//2, tower.y + GRID_SIZE//2)
+    def _draw_enemies(self, enemies):
         for enemy in enemies:
-            enemy_center = (enemy.x, enemy.y)
-            distance = math.sqrt((tower_center[0] - enemy_center[0])**2 + 
-                               (tower_center[1] - enemy_center[1])**2)
-            
-            if distance <= tower.attack_range:
-                # 發射新炮彈
-                projectile = Projectile(tower_center[0], tower_center[1], enemy)
-                tower.projectiles.append(projectile)
-                tower.attack_cooldown = 30  # 設置冷卻時間
-                break
+            pygame.draw.rect(self.screen, RED, 
+                           (enemy.x - 20, enemy.y - 20, 40, 40))
+            health_width = 40 * (enemy.health / enemy.max_health)
+            pygame.draw.rect(self.screen, RED, 
+                           (enemy.x - 20, enemy.y - 30, health_width, 5))
 
-def update_projectiles():
-    for tower in towers:
-        for projectile in tower.projectiles[:]:
-            if projectile.target is None or projectile.target not in enemies:
-                tower.projectiles.remove(projectile)
-                continue
-            
-            # 檢查是否擊中目標
-            dx = projectile.target.x - projectile.x
-            dy = projectile.target.y - projectile.y
-            distance = math.sqrt(dx * dx + dy * dy)
-            
-            if distance < 10:  # 擊中判定範圍
-                projectile.target.health -= 1
-                tower.projectiles.remove(projectile)
+    def _draw_game_stats(self, game_state):
+        stats = [
+            (f'金幣: {game_state.money}', (10, 10)),
+            (f'分數: {game_state.score}', (200, 10)),
+            (f'生命: {game_state.lives}', (400, 10)),
+            (f'波數: {game_state.wave}', (600, 10))
+        ]
+        
+        for text, pos in stats:
+            surface = self.game_font.render(text, True, BLACK)
+            self.screen.blit(surface, pos)
+
+    def _draw_game_over(self):
+        game_over_text = self.game_font.render('遊戲結束！', True, RED)
+        self.screen.blit(game_over_text, 
+                        (WINDOW_WIDTH//2 - 100, WINDOW_HEIGHT//2))
+
+class GameLogic:
+    def __init__(self, game_state):
+        self.game_state = game_state
+
+    def update(self):
+        self._spawn_enemy()
+        self._update_enemies()
+        self._tower_attack()
+        self._update_projectiles()
+
+    def _spawn_enemy(self):
+        self.game_state.spawn_timer += 1
+        if self.game_state.spawn_timer >= 60:
+            row = random.randint(0, GRID_ROWS-1)
+            self.game_state.enemies.append(Enemy(row))
+            self.game_state.spawn_timer = 0
+
+    def _update_enemies(self):
+        for enemy in self.game_state.enemies[:]:
+            if enemy.current_target:
+                if enemy.attack_cooldown <= 0:
+                    enemy.current_target.health -= enemy.attack_power
+                    enemy.attack_cooldown = 30
+                    
+                    if enemy.current_target.health <= 0:
+                        self.game_state.towers.remove(enemy.current_target)
+                        enemy.current_target = None
+                else:
+                    enemy.attack_cooldown -= 1
+            else:
+                enemy_col = (enemy.x - GRID_MARGIN) // GRID_SIZE
+                enemy_row = (enemy.y - GRID_MARGIN) // GRID_SIZE
                 
-                if projectile.target.health <= 0:
-                    enemies.remove(projectile.target)
-                    global money, score
-                    money += 25
-                    score += 10
+                for tower in self.game_state.towers:
+                    tower_col = (tower.x - GRID_MARGIN) // GRID_SIZE
+                    tower_row = (tower.y - GRID_MARGIN) // GRID_SIZE
+                    
+                    if (tower_row == enemy_row and 
+                        tower_col < enemy_col and 
+                        abs(enemy.x - (tower.x + GRID_SIZE)) < enemy.speed):
+                        enemy.current_target = tower
+                        break
+                
+                if not enemy.current_target:
+                    enemy.x -= enemy.speed
+                    if enemy.x < 0:
+                        self.game_state.enemies.remove(enemy)
+                        self.game_state.lives -= 1
 
-# 遊戲主循環
-def main():
-    global money
-    clock = pygame.time.Clock()
-    running = True
-    
-    while running:
-        # 事件處理
+    def _tower_attack(self):
+        for tower in self.game_state.towers:
+            tower.projectiles = [p for p in tower.projectiles if p.move()]
+            
+            if tower.attack_cooldown > 0:
+                tower.attack_cooldown -= 1
+                continue
+
+            tower_center = (tower.x + GRID_SIZE//2, tower.y + GRID_SIZE//2)
+            for enemy in self.game_state.enemies:
+                enemy_center = (enemy.x, enemy.y)
+                distance = math.sqrt((tower_center[0] - enemy_center[0])**2 + 
+                                   (tower_center[1] - enemy_center[1])**2)
+                
+                if distance <= tower.attack_range:
+                    projectile = Projectile(tower_center[0], tower_center[1], enemy, self.game_state)  
+                    tower.projectiles.append(projectile)
+                    tower.attack_cooldown = 30
+                    break
+
+    def _update_projectiles(self):
+        for tower in self.game_state.towers:
+            for projectile in tower.projectiles[:]:
+                if projectile.target is None or projectile.target not in self.game_state.enemies:
+                    tower.projectiles.remove(projectile)
+                    continue
+                
+                dx = projectile.target.x - projectile.x
+                dy = projectile.target.y - projectile.y
+                distance = math.sqrt(dx * dx + dy * dy)
+                
+                if distance < 10:
+                    projectile.target.health -= 1
+                    tower.projectiles.remove(projectile)
+                    
+                    if projectile.target.health <= 0:
+                        self.game_state.enemies.remove(projectile.target)
+                        self.game_state.money += 25
+                        self.game_state.score += 10
+
+class EventHandler:
+    def __init__(self, game_state):
+        self.game_state = game_state
+
+    def handle_events(self):
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                running = False
+                self.game_state.running = False
             elif event.type == pygame.MOUSEBUTTONDOWN:
-                mouse_pos = pygame.mouse.get_pos()
-                # 檢查是否在格子內點擊
-                if (GRID_MARGIN <= mouse_pos[0] <= WINDOW_WIDTH - GRID_MARGIN and
-                    GRID_MARGIN <= mouse_pos[1] <= WINDOW_HEIGHT - GRID_MARGIN):
-                    col = (mouse_pos[0] - GRID_MARGIN) // GRID_SIZE
-                    row = (mouse_pos[1] - GRID_MARGIN) // GRID_SIZE
-                    if col < GRID_COLS and money >= 50:
-                        tower_x = GRID_MARGIN + col * GRID_SIZE
-                        tower_y = GRID_MARGIN + row * GRID_SIZE
-                        if game_grid[row][col] == 0:
-                            towers.append(Tower(tower_x, tower_y))
-                            game_grid[row][col] = 1
-                            money -= 50
-        
-        # 遊戲邏輯更新
-        spawn_enemy()
-        update_enemies()
-        tower_attack()
-        update_projectiles()
-        
-        # 清空畫面
-        screen.fill(WHITE)
-        
-        # 繪製遊戲元素
-        draw_grid()
-        draw_towers()
-        draw_enemies()
-        
-        # 繪製遊戲狀態
-        money_text = game_font.render(f'金幣: {money}', True, BLACK)
-        score_text = game_font.render(f'分數: {score}', True, BLACK)
-        lives_text = game_font.render(f'生命: {lives}', True, BLACK)
-        wave_text = game_font.render(f'波數: {wave}', True, BLACK)
-        
-        screen.blit(money_text, (10, 10))
-        screen.blit(score_text, (200, 10))
-        screen.blit(lives_text, (400, 10))
-        screen.blit(wave_text, (600, 10))
-        
-        # 檢查遊戲結束條件
-        if lives <= 0:
-            game_over_text = game_font.render('遊戲結束！', True, RED)
-            screen.blit(game_over_text, (WINDOW_WIDTH//2 - 100, WINDOW_HEIGHT//2))
-        
-        # 更新畫面
-        pygame.display.flip()
+                self._handle_mouse_click(event.pos)
+
+    def _handle_mouse_click(self, pos):
+        if (GRID_MARGIN <= pos[0] <= WINDOW_WIDTH - GRID_MARGIN and
+            GRID_MARGIN <= pos[1] <= WINDOW_HEIGHT - GRID_MARGIN):
+            col = (pos[0] - GRID_MARGIN) // GRID_SIZE
+            row = (pos[1] - GRID_MARGIN) // GRID_SIZE
+            if self.game_state.can_place_tower(col, row):
+                self.game_state.place_tower(col, row)
+
+def main():
+    clock = pygame.time.Clock()
+    game_state = GameState()
+    game_logic = GameLogic(game_state)
+    game_renderer = GameRenderer(screen, game_font)
+    event_handler = EventHandler(game_state)
+    
+    while game_state.running:
+        event_handler.handle_events()
+        game_logic.update()
+        game_renderer.render(game_state)
         clock.tick(60)
 
     pygame.quit()
