@@ -5,5 +5,50 @@
     "tower_size": {
         "width": 60,
         "height": 60
+    },
+    "window": {
+        "width": 800,
+        "height": 600,
+        "title": "Tower Defense"
+    },
+    "grid": {
+        "rows": 5,
+        "cols": 12,
+        "size": 60,
+        "margin": 20
+    },
+    "game": {
+        "initial_money": 100,
+        "initial_lives": 10,
+        "tower_cost": 50,
+        "fps": 60
+    },
+    "tower": {
+        "attack_range": 150,
+        "attack_cooldown": 30,
+        "initial_health": 100
+    },
+    "enemy": {
+        "speed": 0.5,
+        "radius": 20,
+        "attack_power": 10,
+        "attack_cooldown": 30,
+        "initial_health": 100,
+        "spawn_interval": 60
+    },
+    "projectile": {
+        "speed": 5,
+        "radius": 5,
+        "damage": 20
+    },
+    "colors": {
+        "background": [255, 255, 255],
+        "grid": [200, 200, 200],
+        "tower": [0, 255, 0],
+        "enemy": [255, 0, 0],
+        "projectile": [0, 255, 0],
+        "health_bar_border": [0, 0, 0],
+        "health_bar_fill": [255, 0, 0],
+        "text": [0, 0, 0]
     }
 }

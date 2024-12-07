@@ -1,98 +1,81 @@
 import pygame
-import sys
+import json
 import math
 import random
-import json
+import sys
 import os
 
-# 讀取設定檔
+# Load configuration
 with open('config.json', 'r') as f:
-    config = json.load(f)
+    CONFIG = json.load(f)
 
-# 初始化 Pygame
+# Initialize Pygame
 pygame.init()
 
-# 載入圖片
-def load_image(path):
-    if not os.path.exists(path):
-        print(f"警告: 圖片檔案不存在: {path}")
-        return None
+# Constants from config
+WINDOW_WIDTH = CONFIG['window']['width']
+WINDOW_HEIGHT = CONFIG['window']['height']
+GRID_ROWS = CONFIG['grid']['rows']
+GRID_COLS = CONFIG['grid']['cols']
+GRID_SIZE = CONFIG['grid']['size']
+GRID_MARGIN = CONFIG['grid']['margin']
+
+class GameState:
+    def __init__(self):
+        self.money = CONFIG['game']['initial_money']
+        self.score = 0
+        self.lives = CONFIG['game']['initial_lives']
+        self.towers = []
+        self.enemies = []
+        self.spawn_timer = 0
+        self.selected_tower = None
+
+def load_image(path, size=None):
     try:
         image = pygame.image.load(path)
-        # 調整圖片大小為設定檔中指定的大小
-        return pygame.transform.scale(image, (config['tower_size']['width'], 
-                                           config['tower_size']['height']))
-    except pygame.error as e:
-        print(f"載入圖片時發生錯誤: {e}")
+        if size:
+            image = pygame.transform.scale(image, (size[0], size[1]))
+        return image
+    except pygame.error:
         return None
 
-# 載入塔的圖片
-tower_image = load_image(config['images']['tower'])
-
-# 設定遊戲視窗
-WINDOW_WIDTH = 800
-WINDOW_HEIGHT = 600
-screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
-pygame.display.set_caption("我的塔防遊戲")
-
-# 設定字體
-try:
-    game_font = pygame.font.Font("c:/Windows/Fonts/msjh.ttc", 36)  # 微軟正黑體
-except:
-    try:
-        game_font = pygame.font.Font("c:/Windows/Fonts/mingliu.ttc", 36)  # 細明體
-    except:
-        game_font = pygame.font.Font(None, 36)  # 如果都找不到，使用默認字體
-
-# 顏色定義
-WHITE = (255, 255, 255)
-BLACK = (0, 0, 0)
-RED = (255, 0, 0)
-GREEN = (0, 255, 0)
-BLUE = (0, 0, 255)
-
-# 格子設置
-GRID_SIZE = 80  # 每個格子的大小
-GRID_COLS = 9   # 列數
-GRID_ROWS = 5   # 行數
-GRID_MARGIN = 40  # 邊距
-
-# 遊戲元素
 class Tower:
     def __init__(self, x, y):
         self.x = x
         self.y = y
-        self.attack_power = 1
-        self.attack_range = GRID_SIZE * 1.5
-        self.attack_speed = 1
-        self.cost = 50
         self.projectiles = []
+        self.attack_range = CONFIG['tower']['attack_range']
         self.attack_cooldown = 0
-        self.health = 100  # 新增：防禦塔血量
-        self.max_health = 100  # 新增：最大血量
+        self.health = CONFIG['tower']['initial_health']
+        
+        # Load tower image
+        image_path = CONFIG['images']['tower']
+        size = (CONFIG['tower_size']['width'], CONFIG['tower_size']['height'])
+        self.image = load_image(image_path, size)
 
 class Enemy:
     def __init__(self, row):
-        self.x = WINDOW_WIDTH
+        self.x = WINDOW_WIDTH - GRID_MARGIN
         self.y = GRID_MARGIN + row * GRID_SIZE + GRID_SIZE // 2
-        self.speed = 2
-        self.health = 5
-        self.max_health = 5
-        self.attack_power = 1  # 新增：殭屍攻擊力
-        self.attack_cooldown = 0  # 新增：攻擊冷卻時間
-        self.current_target = None  # 新增：當前攻擊目標
+        self.speed = CONFIG['enemy']['speed']
+        self.radius = CONFIG['enemy']['radius']
+        self.health = CONFIG['enemy']['initial_health']
+        self.max_health = CONFIG['enemy']['initial_health']
+        self.attack_power = CONFIG['enemy']['attack_power']
+        self.attack_cooldown = 0
+        self.current_target = None
 
 class Projectile:
-    def __init__(self, x, y, target, game_state):  
+    def __init__(self, x, y, target, game_state):
         self.x = x
         self.y = y
         self.target = target
-        self.speed = 5
-        self.radius = 5
-        self.game_state = game_state  
+        self.speed = CONFIG['projectile']['speed']
+        self.radius = CONFIG['projectile']['radius']
+        self.game_state = game_state
 
     def move(self):
-        if self.target is None or self.target not in self.game_state.enemies:  
+        if self.target is None or self.target not in self.game_state.enemies:
             return False
         
         dx = self.target.x - self.x
@@ -100,107 +83,114 @@ class Projectile:
         distance = math.sqrt(dx * dx + dy * dy)
         
         if distance < 1:
+            self.target.health -= CONFIG['projectile']['damage']
+            if self.target.health <= 0:
+                self.game_state.enemies.remove(self.target)
+                self.game_state.score += 1
+                self.game_state.money += 10
             return False
         
         self.x += (dx / distance) * self.speed
         self.y += (dy / distance) * self.speed
         return True
 
-class GameState:
-    def __init__(self):
-        self.money = 100
-        self.score = 0
-        self.lives = 10
-        self.wave = 1
-        self.spawn_timer = 0
-        self.towers = []
-        self.enemies = []
-        self.game_grid = [[0 for _ in range(GRID_COLS)] for _ in range(GRID_ROWS)]
-        self.running = True
-
-    def can_place_tower(self, col, row):
-        return (col < GRID_COLS and 
-                self.money >= 50 and 
-                self.game_grid[row][col] == 0)
-
-    def place_tower(self, col, row):
-        tower_x = GRID_MARGIN + col * GRID_SIZE
-        tower_y = GRID_MARGIN + row * GRID_SIZE
-        self.towers.append(Tower(tower_x, tower_y))
-        self.game_grid[row][col] = 1
-        self.money -= 50
-
-    def is_game_over(self):
-        return self.lives <= 0
-
 class GameRenderer:
-    def __init__(self, screen, game_font):
+    def __init__(self, screen, game_state):
         self.screen = screen
-        self.game_font = game_font
+        self.game_state = game_state
+        self.font = pygame.font.Font(None, 36)
 
-    def render(self, game_state):
-        self.screen.fill(WHITE)
+    def draw(self):
+        self.screen.fill(tuple(CONFIG['colors']['background']))
         self._draw_grid()
-        self._draw_towers(game_state.towers)
-        self._draw_enemies(game_state.enemies)
-        self._draw_game_stats(game_state)
-        
-        if game_state.is_game_over():
-            self._draw_game_over()
-        
+        self._draw_towers()
+        self._draw_enemies()
+        self._draw_projectiles()
+        self._draw_stats()
         pygame.display.flip()
 
     def _draw_grid(self):
         for row in range(GRID_ROWS):
             for col in range(GRID_COLS):
-                x = GRID_MARGIN + col * GRID_SIZE
-                y = GRID_MARGIN + row * GRID_SIZE
-                pygame.draw.rect(self.screen, BLACK, (x, y, GRID_SIZE, GRID_SIZE), 1)
+                rect = pygame.Rect(
+                    GRID_MARGIN + col * GRID_SIZE,
+                    GRID_MARGIN + row * GRID_SIZE,
+                    GRID_SIZE,
+                    GRID_SIZE
+                )
+                pygame.draw.rect(self.screen, tuple(CONFIG['colors']['grid']), rect, 1)
 
-    def _draw_towers(self, towers):
-        for tower in towers:
-            if tower_image:
-                image_x = tower.x + (GRID_SIZE - config['tower_size']['width']) // 2
-                image_y = tower.y + (GRID_SIZE - config['tower_size']['height']) // 2
-                self.screen.blit(tower_image, (image_x, image_y))
+    def _draw_towers(self):
+        for tower in self.game_state.towers:
+            if tower.image:
+                self.screen.blit(tower.image, (tower.x, tower.y))
             else:
-                pygame.draw.circle(self.screen, GREEN, 
-                                 (tower.x + GRID_SIZE//2, tower.y + GRID_SIZE//2), 
-                                 GRID_SIZE//3)
-            
-            health_width = 40 * (tower.health / tower.max_health)
-            pygame.draw.rect(self.screen, GREEN, 
-                           (tower.x + GRID_SIZE//4, tower.y - 10, health_width, 5))
-            
+                pygame.draw.circle(
+                    self.screen,
+                    tuple(CONFIG['colors']['tower']),
+                    (tower.x + GRID_SIZE//2, tower.y + GRID_SIZE//2),
+                    GRID_SIZE//2
+                )
+            # Draw tower health bar
+            health_bar_width = GRID_SIZE
+            health_bar_height = 5
+            health_percentage = tower.health / CONFIG['tower']['initial_health']
+            pygame.draw.rect(
+                self.screen,
+                tuple(CONFIG['colors']['health_bar_border']),
+                (tower.x, tower.y - 10, health_bar_width, health_bar_height),
+                1
+            )
+            pygame.draw.rect(
+                self.screen,
+                tuple(CONFIG['colors']['health_bar_fill']),
+                (tower.x, tower.y - 10, health_bar_width * health_percentage, health_bar_height)
+            )
+
+    def _draw_enemies(self):
+        for enemy in self.game_state.enemies:
+            pygame.draw.circle(
+                self.screen,
+                tuple(CONFIG['colors']['enemy']),
+                (int(enemy.x), int(enemy.y)),
+                enemy.radius
+            )
+            # Draw enemy health bar
+            health_bar_width = enemy.radius * 2
+            health_bar_height = 5
+            health_percentage = enemy.health / enemy.max_health
+            pygame.draw.rect(
+                self.screen,
+                tuple(CONFIG['colors']['health_bar_border']),
+                (enemy.x - enemy.radius, enemy.y - enemy.radius - 10,
+                 health_bar_width, health_bar_height),
+                1
+            )
+            pygame.draw.rect(
+                self.screen,
+                tuple(CONFIG['colors']['health_bar_fill']),
+                (enemy.x - enemy.radius, enemy.y - enemy.radius - 10,
+                 health_bar_width * health_percentage, health_bar_height)
+            )
+
+    def _draw_projectiles(self):
+        for tower in self.game_state.towers:
             for projectile in tower.projectiles:
-                pygame.draw.circle(self.screen, GREEN,
-                                 (int(projectile.x), int(projectile.y)),
-                                 projectile.radius)
+                pygame.draw.circle(
+                    self.screen,
+                    tuple(CONFIG['colors']['projectile']),
+                    (int(projectile.x), int(projectile.y)),
+                    projectile.radius
+                )
 
-    def _draw_enemies(self, enemies):
-        for enemy in enemies:
-            pygame.draw.rect(self.screen, RED, 
-                           (enemy.x - 20, enemy.y - 20, 40, 40))
-            health_width = 40 * (enemy.health / enemy.max_health)
-            pygame.draw.rect(self.screen, RED, 
-                           (enemy.x - 20, enemy.y - 30, health_width, 5))
-
-    def _draw_game_stats(self, game_state):
-        stats = [
-            (f'金幣: {game_state.money}', (10, 10)),
-            (f'分數: {game_state.score}', (200, 10)),
-            (f'生命: {game_state.lives}', (400, 10)),
-            (f'波數: {game_state.wave}', (600, 10))
-        ]
+    def _draw_stats(self):
+        money_text = self.font.render(f'Money: {self.game_state.money}', True, tuple(CONFIG['colors']['text']))
+        score_text = self.font.render(f'Score: {self.game_state.score}', True, tuple(CONFIG['colors']['text']))
+        lives_text = self.font.render(f'Lives: {self.game_state.lives}', True, tuple(CONFIG['colors']['text']))
         
-        for text, pos in stats:
-            surface = self.game_font.render(text, True, BLACK)
-            self.screen.blit(surface, pos)
-
-    def _draw_game_over(self):
-        game_over_text = self.game_font.render('遊戲結束！', True, RED)
-        self.screen.blit(game_over_text, 
-                        (WINDOW_WIDTH//2 - 100, WINDOW_HEIGHT//2))
+        self.screen.blit(money_text, (10, 10))
+        self.screen.blit(score_text, (200, 10))
+        self.screen.blit(lives_text, (400, 10))
 
 class GameLogic:
     def __init__(self, game_state):
@@ -210,11 +200,10 @@ class GameLogic:
         self._spawn_enemy()
         self._update_enemies()
         self._tower_attack()
-        self._update_projectiles()
 
     def _spawn_enemy(self):
         self.game_state.spawn_timer += 1
-        if self.game_state.spawn_timer >= 60:
+        if self.game_state.spawn_timer >= CONFIG['enemy']['spawn_interval']:
             row = random.randint(0, GRID_ROWS-1)
             self.game_state.enemies.append(Enemy(row))
             self.game_state.spawn_timer = 0
@@ -224,11 +213,15 @@ class GameLogic:
             if enemy.current_target:
                 if enemy.attack_cooldown <= 0:
                     enemy.current_target.health -= enemy.attack_power
-                    enemy.attack_cooldown = 30
+                    enemy.attack_cooldown = CONFIG['enemy']['attack_cooldown']
                     
                     if enemy.current_target.health <= 0:
-                        self.game_state.towers.remove(enemy.current_target)
-                        enemy.current_target = None
+                        if enemy.current_target in self.game_state.towers:  
+                            self.game_state.towers.remove(enemy.current_target)
+                        # 
+                        for e in self.game_state.enemies:
+                            if e.current_target == enemy.current_target:
+                                e.current_target = None
                 else:
                     enemy.attack_cooldown -= 1
             else:
@@ -266,30 +259,10 @@ class GameLogic:
                                    (tower_center[1] - enemy_center[1])**2)
                 
                 if distance <= tower.attack_range:
-                    projectile = Projectile(tower_center[0], tower_center[1], enemy, self.game_state)  
+                    projectile = Projectile(tower_center[0], tower_center[1], enemy, self.game_state)
                     tower.projectiles.append(projectile)
-                    tower.attack_cooldown = 30
+                    tower.attack_cooldown = CONFIG['tower']['attack_cooldown']
                     break
-
-    def _update_projectiles(self):
-        for tower in self.game_state.towers:
-            for projectile in tower.projectiles[:]:
-                if projectile.target is None or projectile.target not in self.game_state.enemies:
-                    tower.projectiles.remove(projectile)
-                    continue
-                
-                dx = projectile.target.x - projectile.x
-                dy = projectile.target.y - projectile.y
-                distance = math.sqrt(dx * dx + dy * dy)
-                
-                if distance < 10:
-                    projectile.target.health -= 1
-                    tower.projectiles.remove(projectile)
-                    
-                    if projectile.target.health <= 0:
-                        self.game_state.enemies.remove(projectile.target)
-                        self.game_state.money += 25
-                        self.game_state.score += 10
 
 class EventHandler:
     def __init__(self, game_state):
@@ -298,33 +271,49 @@ class EventHandler:
     def handle_events(self):
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                self.game_state.running = False
+                return False
             elif event.type == pygame.MOUSEBUTTONDOWN:
-                self._handle_mouse_click(event.pos)
-
-    def _handle_mouse_click(self, pos):
-        if (GRID_MARGIN <= pos[0] <= WINDOW_WIDTH - GRID_MARGIN and
-            GRID_MARGIN <= pos[1] <= WINDOW_HEIGHT - GRID_MARGIN):
-            col = (pos[0] - GRID_MARGIN) // GRID_SIZE
-            row = (pos[1] - GRID_MARGIN) // GRID_SIZE
-            if self.game_state.can_place_tower(col, row):
-                self.game_state.place_tower(col, row)
+                if event.button == 1:  # Left click
+                    mouse_x, mouse_y = pygame.mouse.get_pos()
+                    col = (mouse_x - GRID_MARGIN) // GRID_SIZE
+                    row = (mouse_y - GRID_MARGIN) // GRID_SIZE
+                    
+                    if (0 <= row < GRID_ROWS and 0 <= col < GRID_COLS and
+                            self.game_state.money >= CONFIG['game']['tower_cost']):
+                        tower_x = GRID_MARGIN + col * GRID_SIZE
+                        tower_y = GRID_MARGIN + row * GRID_SIZE
+                        
+                        # Check if tower already exists at this position
+                        tower_exists = any(t.x == tower_x and t.y == tower_y 
+                                         for t in self.game_state.towers)
+                        
+                        if not tower_exists:
+                            self.game_state.towers.append(Tower(tower_x, tower_y))
+                            self.game_state.money -= CONFIG['game']['tower_cost']
+        return True
 
 def main():
+    # Initialize the game window
+    screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
+    pygame.display.set_caption(CONFIG['window']['title'])
     clock = pygame.time.Clock()
+
+    # Initialize game components
     game_state = GameState()
+    game_renderer = GameRenderer(screen, game_state)
     game_logic = GameLogic(game_state)
-    game_renderer = GameRenderer(screen, game_font)
     event_handler = EventHandler(game_state)
-    
-    while game_state.running:
-        event_handler.handle_events()
+
+    # Game loop
+    running = True
+    while running:
+        running = event_handler.handle_events()
         game_logic.update()
-        game_renderer.render(game_state)
-        clock.tick(60)
+        game_renderer.draw()
+        clock.tick(CONFIG['game']['fps'])
 
     pygame.quit()
     sys.exit()
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
